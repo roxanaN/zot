@@ -6,7 +6,7 @@ zot is a open source registry based on the [OCI Distribution Spec](https://githu
 
 Try out _zot_ 
 ```markdown
-docker run -p 5000:5000 atomixos/zot:<tagname>
+docker run -p 5000:5000 atomixos/zot:latest
 ```
 
 For more details see [https://github.com/anuvu/zot](https://github.com/anuvu/zot).
