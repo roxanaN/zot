@@ -2,6 +2,13 @@
 
 zot is a open source registry based on the [OCI Distribution Spec](https://github.com/opencontainers/distribution-spec) compatible with the Kubernetes ecosystem.
 
+### Try It! 
+
+Try out _zot_ 
+```markdown
+docker run -p 5000:5000 atomixos/zot:latest
+```
+
 ## Features
 * Uses [OCI image layout](https://github.com/opencontainers/image-spec/blob/master/image-layout.md) for image storage
 * Supports [helm charts](https://helm.sh/docs/topics/registries/)
@@ -20,12 +27,5 @@ zot is a open source registry based on the [OCI Distribution Spec](https://githu
   * Layer deduplication using hard links when content is identical
 * Swagger based documentation
 * Single binary for _all_ the above features
-
-### Try It! 
-
-Try out _zot_ 
-```markdown
-docker run -p 5000:5000 atomixos/zot:latest
-```
 
 For more details see [https://github.com/anuvu/zot](https://github.com/anuvu/zot).
