@@ -4,7 +4,6 @@ zot is a open source registry based on the [OCI Distribution Spec](https://githu
 
 ### Try It! 
 
-Try out _zot_ 
 ```markdown
 docker run -p 5000:5000 atomixos/zot:latest
 ```
