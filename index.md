@@ -2,7 +2,7 @@
 
 zot is a open source registry based on the [OCI Distribution Spec](https://github.com/opencontainers/distribution-spec) compatible with the Kubernetes ecosystem.
 
-[Latest Release](https://github.com/anuvu/zot/releases/latest) => [v1.1.12](https://github.com/anuvu/zot/releases/tag/v1.1.12)
+[Latest Release](https://github.com/anuvu/zot/releases/latest) => [v1.1.13](https://github.com/anuvu/zot/releases/tag/v1.1.13)
 
 
 ### Try It! 
