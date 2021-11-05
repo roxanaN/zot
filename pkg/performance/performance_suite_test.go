@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"strings"
-	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -15,16 +14,23 @@ import (
 )
 
 var (
-	pushedImagesNames []string
-	start             time.Time
-	op                skopeoOp
-	configPath        string
-	serverConfig      *ServerConfig
+	// pushedImagesNames []string
+	op                          skopeoOp
+	serverConfigPath            string
+	serverConfig                *ServerConfig
+	measurementConfig           *MeasurementConfig
+	measurementConfigPath       string
+	singleImagePushTime         int
+	parallelPushTime            int
+	singleImageParallelPushTime int
+	times                       int
 )
 
 func init() {
-	flag.StringVar(&configPath, "server.config", "",
+	flag.StringVar(&serverConfigPath, "server.config", "",
 		"path to the server config file")
+	flag.StringVar(&measurementConfigPath, "measurement.config", "",
+		"path to the measurement config file")
 }
 
 func TestPerformance(t *testing.T) {
@@ -32,18 +38,16 @@ func TestPerformance(t *testing.T) {
 	RunSpecs(t, "Performance Suite")
 }
 
-// numarul de repetari din fisierul de config
-
 var _ = BeforeSuite(func() {
 	err := os.MkdirAll("pulled_images", 0777)
 	if err != nil {
 		log.Fatalln("Error creating pulled_images dir!", err)
 	}
 
-	Expect(configPath).To(BeAnExistingFile(),
+	Expect(serverConfigPath).To(BeAnExistingFile(),
 		"Invalid test suite argument. server.config should be an existing file.")
 
-	serverConfig = LoadConfig(configPath)
+	serverConfig = LoadServerConfig(serverConfigPath)
 	op = skopeoOp{
 		serverConfig.Username,
 		serverConfig.Password,
@@ -51,6 +55,15 @@ var _ = BeforeSuite(func() {
 		serverConfig.TlsVerify,
 		serverConfig.Repo,
 	}
+
+	Expect(measurementConfigPath).To(BeAnExistingFile(),
+		"Invalid test suite argument. measurement.config should be an existing file.")
+
+	measurementConfig = LoadMeasurementConfig(measurementConfigPath)
+	singleImagePushTime = measurementConfig.SingleImagePushTime
+	parallelPushTime = measurementConfig.ParallelPushTime
+	singleImageParallelPushTime = measurementConfig.SingleImageParallelPushTime
+	times = measurementConfig.Times
 })
 
 var _ = AfterSuite(func() {
@@ -61,135 +74,60 @@ var _ = AfterSuite(func() {
 })
 
 var _ = Describe("Check Zot Performance", func() {
-	It("skopeo should be installed", func() {
-		Expect(checkSkopeoBinary()).To(Equal(true))
-	})
+	Measure("Performance measuring - push", func(b Benchmarker) {
+		runtime := b.Time("runtime", func() {
+			imageName := "zot-tests-dummy-push"
+			Expect(runPushCommand(op, imageName)).To(Equal(true))
+			Expect(runDeleteCommand(op, imageName)).To(Equal(true))
+		})
+		Expect(runtime.Seconds()).To(BeNumerically("<", singleImagePushTime),
+			"Push oprations shouldn't take too long!")
+	}, times)
 
-	// Measure("it should do something hard efficiently", func(b Benchmarker) {
-	// runtime := b.Time("runtime", func() {
-	It("Push operation", func() {
-		imageName := "zot-tests-dummy-push"
-		Expect(runPushCommand(op, imageName)).To(Equal(true))
-	})
+	Measure("Performance measuring - parallel push", func(b Benchmarker) {
+		runtime := b.Time("runtime", func() {
+			imageNameIdx := "zot-tests-parallel-images-dummy-%d"
+			var commands []string
+			var pushedImages []string
 
-	It("Pull operation", func() {
-		imageName := "zot-tests-dummy-push"
-		Expect(runCopy(op, imageName, imageName, false)).To(Equal(true))
-	})
+			for i := 1; i <= 5; i++ {
+				imageName := fmt.Sprintf(imageNameIdx, i)
+				pushedImages = append(pushedImages, imageName)
+				arguments := setCopyCommand(op)
 
-	It("Delete operation", func() {
-		imageName := "zot-tests-dummy-push"
-		Expect(runDeleteCommand(op, imageName)).To(Equal(true))
-	})
-	// 	})
+				arguments = setCommandVariables(op, arguments, imageName, imageName, true)
+				commands = append(commands, strings.Join(arguments, " "))
+			}
 
-	// 	Expect(runtime.Seconds()).To(BeNumerically("<", 2),
-	// 		"Push and Pull oprations shouldn't take too long!")
-	// }, 10)
+			Expect(runCommands(commands)).To(Equal(true))
 
-	// Measure("it should do something hard efficiently", func(b Benchmarker) {
-	// 	runtime := b.Time("runtime", func() {
-	It("Running multiple images parallel write commands", func() {
-		imageNameIdx := "zot-tests-parallel-images-dummy-%d"
-		var commands []string
-		var pushedImages []string
+			for _, imageName := range pushedImages {
+				arguments := setDeleteCommand(op, imageName)
+				commands = append(commands, strings.Join(arguments, " "))
+			}
 
-		for i := 1; i <= 5; i++ {
-			imageName := fmt.Sprintf(imageNameIdx, i)
-			pushedImages = append(pushedImages, imageName)
-			arguments := setCopyCommand(op)
+			Expect(runCommands(commands)).To(Equal(true))
+		})
 
-			arguments = setCommandVariables(op, arguments, imageName, imageName, true)
-			commands = append(commands, strings.Join(arguments, " "))
-		}
+		Expect(runtime.Seconds()).To(BeNumerically("<", parallelPushTime),
+			"Push oprations shouldn't take too long!")
+	}, times)
 
-		Expect(runCommands(commands)).To(Equal(true))
-		pushedImagesNames = append(pushedImagesNames, pushedImages...)
-	})
+	Measure("Performance measuring - push single image parallel", func(b Benchmarker) {
+		runtime := b.Time("runtime", func() {
+			imageName := "zot-tests-single-images-dummy"
+			var commands []string
 
-	It("Running multiple images parallel read commands", func() {
-		imageNameIdx := "zot-tests-parallel-images-dummy-%d"
-		var commands []string
+			for i := 1; i <= 5; i++ {
+				arguments := setCopyCommand(op)
+				arguments = setCommandVariables(op, arguments, imageName, imageName, true)
+				commands = append(commands, strings.Join(arguments, " "))
+			}
 
-		for i := 1; i <= 5; i++ {
-			imageName := fmt.Sprintf(imageNameIdx, i)
-			arguments := setCopyCommand(op)
-			arguments = setCommandVariables(op, arguments, imageName, imageName, false)
-			commands = append(commands, strings.Join(arguments, " "))
-		}
-		Expect(runCommands(commands)).To(Equal(true))
-	})
+			Expect(runCommands(commands)).To(Equal(true))
+		})
 
-	It("Running skopeo delete command", func() {
-		var commands []string
-
-		for _, imageName := range pushedImagesNames {
-			arguments := setDeleteCommand(op, imageName)
-			commands = append(commands, strings.Join(arguments, " "))
-		}
-
-		Expect(runCommands(commands)).To(Equal(true))
-	})
-	// 	})
-
-	// 	Expect(runtime.Seconds()).To(BeNumerically("<", 2),
-	// 		"Push and Pull oprations shouldn't take too long!")
-	// }, 10)
-
-	// Measure("it should do something hard efficiently", func(b Benchmarker) {
-	// 	runtime := b.Time("runtime", func() {
-	It("Running single image parallel write commands", func() {
-		imageName := "zot-tests-single-images-dummy"
-		var commands []string
-
-		for i := 1; i <= 5; i++ {
-			arguments := setCopyCommand(op)
-			arguments = setCommandVariables(op, arguments, imageName, imageName, true)
-			commands = append(commands, strings.Join(arguments, " "))
-		}
-
-		Expect(runCommands(commands)).To(Equal(true))
-
-		pushedImagesNames = append(pushedImagesNames, imageName)
-	})
-
-	It("Running single image parallel read commands", func() {
-		imageName := "zot-tests-single-images-dummy"
-		var commands []string
-
-		for i := 1; i <= 5; i++ {
-			arguments := setCopyCommand(op)
-			arguments = setCommandVariables(op, arguments, imageName,
-				fmt.Sprintf("%s-%d:%s", imageName, i, "0.1.1"), false)
-			commands = append(commands, strings.Join(arguments, " "))
-		}
-		Expect(runCommands(commands)).To(Equal(true))
-	})
-	// })
-
-	It("Running skopeo delete command", func() {
-		var commands []string
-
-		for _, imageName := range pushedImagesNames {
-			arguments := setDeleteCommand(op, imageName)
-			commands = append(commands, strings.Join(arguments, " "))
-		}
-
-		Expect(runCommands(commands)).To(Equal(true))
-	})
-
-	// Expect(runtime.Seconds()).To(BeNumerically("<", 2),
-	// 	"Push and Pull oprations shouldn't take too long!")
-	// }, 1)
-
-	It("Running skopeo delete command", func() {
-		var commands []string
-
-		for _, imageName := range pushedImagesNames {
-			arguments := setDeleteCommand(op, imageName)
-			commands = append(commands, strings.Join(arguments, " "))
-		}
-
-		Expect(runCommands(commands)).To(Equal(true))
-	})
+		Expect(runtime.Seconds()).To(BeNumerically("<", singleImageParallelPushTime),
+			"Push and Pull oprations shouldn't take too long!")
+	}, times)
 })

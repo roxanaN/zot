@@ -1,7 +1,0 @@
-images/zot-tests-single-images-dummy filter=lfs diff=lfs merge=lfs -text
-images/zot-tests-dummy-push filter=lfs diff=lfs merge=lfs -text
-images/zot-tests-parallel-images-dummy-1 filter=lfs diff=lfs merge=lfs -text
-images/zot-tests-parallel-images-dummy-2 filter=lfs diff=lfs merge=lfs -text
-images/zot-tests-parallel-images-dummy-3 filter=lfs diff=lfs merge=lfs -text
-images/zot-tests-parallel-images-dummy-4 filter=lfs diff=lfs merge=lfs -text
-images/zot-tests-parallel-images-dummy-5 filter=lfs diff=lfs merge=lfs -text

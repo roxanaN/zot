@@ -16,7 +16,7 @@ type ServerConfig struct {
 	TlsVerify bool   `json:"tlsVerify"`
 }
 
-func LoadConfig(input string) *ServerConfig {
+func LoadServerConfig(input string) *ServerConfig {
 	configData, err := ioutil.ReadFile(input)
 	Expect(err).ToNot(HaveOccurred(),
 		"Failed to read config file")
