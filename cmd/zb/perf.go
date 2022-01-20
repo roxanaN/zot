@@ -1,11 +1,14 @@
 package main
 
 import (
-	"crypto/rand"
+	"bytes"
+	crand "crypto/rand"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
+	mrand "math/rand"
 	"net/http"
 	"os"
 	"path"
@@ -36,6 +39,7 @@ const (
 	mediumBlob           = 10 * MiB
 	largeBlob            = 100 * MiB
 	cicdFmt              = "ci-cd"
+	pbty33               = 0.33
 )
 
 //nolint:gochecknoglobals // used only in this test
@@ -68,7 +72,7 @@ func setup(workingDir string) {
 
 		// write a random first page so every test run has different blob content
 		rnd := make([]byte, rndPageSize)
-		if _, err := rand.Read(rnd); err != nil {
+		if _, err := crand.Read(rnd); err != nil {
 			log.Fatal(err)
 		}
 
@@ -223,6 +227,18 @@ func printStats(requests int, summary *statsSummary, outFmt string) {
 	}
 }
 
+// nolint:gosec
+func flipTestSize(probability float64) int {
+	switch toss := mrand.Float64(); {
+	case toss < probability:
+		return smallBlob
+	case toss < 2*probability:
+		return mediumBlob
+	default:
+		return largeBlob
+	}
+}
+
 // test suites/funcs.
 
 type testFunc func(workdir, url, auth, repo string, requests int, config testConfig, statsCh chan statsRecord) error
@@ -287,6 +303,10 @@ func PushMonolithStreamed(workdir, url, auth, trepo string, requests int,
 		creds := strings.Split(auth, ":")
 		client.SetBasicAuth(creds[0], creds[1])
 	}
+
+	manifestHash := make(map[string]string)
+	configHash := make(map[string]string)
+	layerHash := make(map[string][]ispec.Descriptor)
 
 	for count := 0; count < requests; count++ {
 		func() {
@@ -452,11 +472,13 @@ func PushMonolithStreamed(workdir, url, auth, trepo string, requests int,
 				log.Fatal(err)
 			}
 
+			manifestTag := fmt.Sprintf("tag%d", count)
+
 			resp, err = resty.R().
 				SetContentLength(true).
 				SetHeader("Content-Type", "application/vnd.oci.image.manifest.v1+json").
 				SetBody(content).
-				Put(fmt.Sprintf("%s/v2/%s/manifests/%s", url, repo, fmt.Sprintf("tag%d", count)))
+				Put(fmt.Sprintf("%s/v2/%s/manifests/%s", url, repo, manifestTag))
 
 			latency = time.Since(start)
 
@@ -473,7 +495,16 @@ func PushMonolithStreamed(workdir, url, auth, trepo string, requests int,
 
 				return
 			}
+
+			manifestHash[repo] = manifestTag
+			configHash[manifestTag] = cdigest.String()
+			layerHash[digest.String()] = manifest.Layers
 		}()
+	}
+
+	err := deleteUploadedFiles(manifestHash, configHash, layerHash, url, client)
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -487,6 +518,10 @@ func PushChunkStreamed(workdir, url, auth, trepo string, requests int,
 		creds := strings.Split(auth, ":")
 		client.SetBasicAuth(creds[0], creds[1])
 	}
+
+	manifestHash := make(map[string]string)
+	configHash := make(map[string]string)
+	layerHash := make(map[string][]ispec.Descriptor)
 
 	for count := 0; count < requests; count++ {
 		func() {
@@ -721,11 +756,14 @@ func PushChunkStreamed(workdir, url, auth, trepo string, requests int,
 				log.Fatal(err)
 			}
 
+			manifestTag := fmt.Sprintf("tag%d", count)
+
+			// finish upload
 			resp, err = resty.R().
 				SetContentLength(true).
 				SetHeader("Content-Type", "application/vnd.oci.image.manifest.v1+json").
 				SetBody(content).
-				Put(fmt.Sprintf("%s/v2/%s/manifests/%s", url, repo, fmt.Sprintf("tag%d", count)))
+				Put(fmt.Sprintf("%s/v2/%s/manifests/%s", url, repo, manifestTag))
 
 			latency = time.Since(start)
 
@@ -742,7 +780,287 @@ func PushChunkStreamed(workdir, url, auth, trepo string, requests int,
 
 				return
 			}
+
+			manifestHash[repo] = manifestTag
+			configHash[manifestTag] = cdigest.String()
+			layerHash[digest.String()] = manifest.Layers
 		}()
+	}
+
+	err := deleteUploadedFiles(manifestHash, configHash, layerHash, url, client)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+//nolint: gocyclo
+func Pull(workdir, url, auth, trepo string, requests int,
+	config testConfig, statsCh chan statsRecord) error {
+	client := resty.New()
+
+	if auth != "" {
+		creds := strings.Split(auth, ":")
+		client.SetBasicAuth(creds[0], creds[1])
+	}
+
+	var manifestHash, manifestHashSizeS, manifestHashSizeM, manifestHashSizeL map[string]string
+
+	var configHash, configHashSizeS, configHashSizeM, configHashSizeL map[string]string
+
+	var layerHash, layerHashSizeS, layerHashSizeM, layerHashSizeL map[string][]ispec.Descriptor
+
+	var err error
+
+	if config.mixedSize {
+		// Push small blob
+		manifestHashSizeS, configHashSizeS, layerHashSizeS, err = push(workdir, url, trepo, smallBlob, client)
+		if err != nil {
+			return err
+		}
+
+		// Push medium blob
+		manifestHashSizeM, configHashSizeM, layerHashSizeM, err = push(workdir, url, trepo, mediumBlob, client)
+		if err != nil {
+			return err
+		}
+
+		// Push large blob
+		manifestHashSizeL, configHashSizeL, layerHashSizeL, err = push(workdir, url, trepo, largeBlob, client)
+		if err != nil {
+			return err
+		}
+	} else {
+		// Push blob given size
+		manifestHash, configHash, layerHash, err = push(workdir, url, trepo, config.size, client)
+		if err != nil {
+			return err
+		}
+	}
+
+	// download image
+	for count := 0; count < requests; count++ {
+		func() {
+			start := time.Now()
+
+			var isConnFail, isErr bool
+
+			var statusCode int
+
+			var latency time.Duration
+
+			defer func() {
+				// send a stats record
+				statsCh <- statsRecord{
+					latency:    latency,
+					statusCode: statusCode,
+					isConnFail: isConnFail,
+					isErr:      isErr,
+				}
+			}()
+
+			if config.mixedSize {
+				size := flipTestSize(config.probability)
+
+				switch size {
+				case smallBlob:
+					manifestHash = manifestHashSizeS
+					configHash = configHashSizeS
+				case mediumBlob:
+					manifestHash = manifestHashSizeM
+					configHash = configHashSizeM
+				case largeBlob:
+					manifestHash = manifestHashSizeL
+					configHash = configHashSizeL
+				}
+			}
+
+			for repo, manifestTag := range manifestHash {
+				manifestLoc := fmt.Sprintf("%s/v2/%s/manifests/%s", url, repo, manifestTag)
+
+				// check manifest
+				resp, err := client.R().Head(manifestLoc)
+
+				latency = time.Since(start)
+
+				if err != nil {
+					isConnFail = true
+
+					return
+				}
+
+				// request specific check
+				statusCode = resp.StatusCode()
+				if statusCode != http.StatusOK {
+					isErr = true
+
+					return
+				}
+
+				// send request and get the manifest
+				resp, err = client.R().Get(manifestLoc)
+
+				latency = time.Since(start)
+
+				if err != nil {
+					isConnFail = true
+
+					return
+				}
+
+				// request specific check
+				statusCode = resp.StatusCode()
+				if statusCode != http.StatusOK {
+					isErr = true
+
+					return
+				}
+
+				manifestBody := resp.Body()
+
+				// file copy simulation
+				_, err = io.Copy(ioutil.Discard, bytes.NewReader(manifestBody))
+
+				latency = time.Since(start)
+
+				if err != nil {
+					log.Fatal(err)
+				}
+
+				var pulledManifest ispec.Manifest
+
+				err = json.Unmarshal(manifestBody, &pulledManifest)
+				if err != nil {
+					log.Fatal(err)
+				}
+
+				// check config
+				configLoc := fmt.Sprintf("%s/v2/%s/blobs/%s", url, repo, configHash[manifestTag])
+				resp, err = client.R().Head(configLoc)
+
+				latency = time.Since(start)
+
+				if err != nil {
+					isConnFail = true
+
+					return
+				}
+
+				// request specific check
+				statusCode = resp.StatusCode()
+				if statusCode != http.StatusOK {
+					isErr = true
+
+					return
+				}
+
+				// send request and get the config
+				resp, err = client.R().Get(configLoc)
+
+				latency = time.Since(start)
+
+				if err != nil {
+					isConnFail = true
+
+					return
+				}
+
+				// request specific check
+				statusCode = resp.StatusCode()
+				if statusCode != http.StatusOK {
+					isErr = true
+
+					return
+				}
+
+				configBody := resp.Body()
+
+				// file copy simulation
+				_, err = io.Copy(ioutil.Discard, bytes.NewReader(configBody))
+
+				latency = time.Since(start)
+
+				if err != nil {
+					log.Fatal(err)
+				}
+
+				// download blobs
+				for _, layer := range pulledManifest.Layers {
+					blobDigest := layer.Digest
+					blobLoc := fmt.Sprintf("%s/v2/%s/blobs/%s", url, repo, blobDigest)
+
+					// check blob
+					resp, err := client.R().Head(blobLoc)
+
+					latency = time.Since(start)
+
+					if err != nil {
+						isConnFail = true
+
+						return
+					}
+
+					// request specific check
+					statusCode = resp.StatusCode()
+					if statusCode != http.StatusOK {
+						isErr = true
+
+						return
+					}
+
+					// send request and get response the blob
+					resp, err = client.R().Get(blobLoc)
+
+					latency = time.Since(start)
+
+					if err != nil {
+						isConnFail = true
+
+						return
+					}
+
+					// request specific check
+					statusCode = resp.StatusCode()
+					if statusCode != http.StatusOK {
+						isErr = true
+
+						return
+					}
+
+					blobBody := resp.Body()
+
+					// file copy simulation
+					_, err = io.Copy(ioutil.Discard, bytes.NewReader(blobBody))
+					if err != nil {
+						log.Fatal(err)
+					}
+				}
+			}
+		}()
+	}
+
+	// Clean up
+	if config.mixedSize {
+		err = deleteUploadedFiles(manifestHashSizeS, configHashSizeS, layerHashSizeS, url, client)
+		if err != nil {
+			return err
+		}
+
+		err = deleteUploadedFiles(manifestHashSizeM, configHashSizeM, layerHashSizeM, url, client)
+		if err != nil {
+			return err
+		}
+
+		err = deleteUploadedFiles(manifestHashSizeL, configHashSizeL, layerHashSizeL, url, client)
+		if err != nil {
+			return err
+		}
+	} else {
+		err = deleteUploadedFiles(manifestHash, configHash, layerHash, url, client)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -754,7 +1072,9 @@ type testConfig struct {
 	name  string
 	tfunc testFunc
 	// test-specific params
-	size int
+	size        int
+	probability float64
+	mixedSize   bool
 }
 
 var testSuite = []testConfig{ // nolint:gochecknoglobals // used only in this test
@@ -791,6 +1111,27 @@ var testSuite = []testConfig{ // nolint:gochecknoglobals // used only in this te
 		name:  "Push Chunk Streamed 100MB",
 		tfunc: PushChunkStreamed,
 		size:  largeBlob,
+	},
+	{
+		name:  "Pull 1MB",
+		tfunc: Pull,
+		size:  smallBlob,
+	},
+	{
+		name:  "Pull 10MB",
+		tfunc: Pull,
+		size:  mediumBlob,
+	},
+	{
+		name:  "Pull 100MB",
+		tfunc: Pull,
+		size:  largeBlob,
+	},
+	{
+		name:        "Pull Mixed 33% 1MB, 33% 10MB, 33% 100MB",
+		tfunc:       Pull,
+		probability: pbty33,
+		mixedSize:   true,
 	},
 }
 
