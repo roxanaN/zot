@@ -227,8 +227,37 @@ func printStats(requests int, summary *statsSummary, outFmt string) {
 	}
 }
 
+/*
+
+// FIXME: what if is 2%:70%:28%??
+
+CHECK like this:
+
+0 - 0.02 -> small
+0.02 - 0.7 -> medium
+0.72 - 1.0 -> large
+
+One option:
+So pass in a probability list [0.02, 0.7, 0.27] or it could be [0.7, 0.3]
+
+Another option:
+[{probability: 0.02, fn: small_func}, {probability: 0.70, fn: medium_func}, {probability: 0.28, fn: large_func}]
+func flipAndRunTest(probRangeAndFns ... } ()
+
+*/
+
 // nolint:gosec
-func flipTestSize(probability float64) int {
+func flipTestSize(probabilityRoange ...float64) int {
+	toss := mrand.Float64()
+
+	for idx, r := range probabilityRange {
+		if toss < r {
+			r.fn()     // if a func is also provided with the probability
+			return idx // test corner cases
+		}
+	}
+
+	// below is not enough
 	switch toss := mrand.Float64(); {
 	case toss < probability:
 		return smallBlob
@@ -813,26 +842,27 @@ func Pull(workdir, url, auth, trepo string, requests int,
 
 	var err error
 
+	// setup: push images before pulling
 	if config.mixedSize {
-		// Push small blob
+		// push small blob
 		manifestHashSizeS, configHashSizeS, layerHashSizeS, err = push(workdir, url, trepo, smallBlob, client)
 		if err != nil {
 			return err
 		}
 
-		// Push medium blob
+		// push medium blob
 		manifestHashSizeM, configHashSizeM, layerHashSizeM, err = push(workdir, url, trepo, mediumBlob, client)
 		if err != nil {
 			return err
 		}
 
-		// Push large blob
+		// push large blob
 		manifestHashSizeL, configHashSizeL, layerHashSizeL, err = push(workdir, url, trepo, largeBlob, client)
 		if err != nil {
 			return err
 		}
 	} else {
-		// Push blob given size
+		// push blob of given size
 		manifestHash, configHash, layerHash, err = push(workdir, url, trepo, config.size, client)
 		if err != nil {
 			return err
@@ -862,6 +892,8 @@ func Pull(workdir, url, auth, trepo string, requests int,
 
 			if config.mixedSize {
 				size := flipTestSize(config.probability)
+
+				// make and index map[size]->hash below instead of a "switch"?
 
 				switch size {
 				case smallBlob:
@@ -1040,7 +1072,9 @@ func Pull(workdir, url, auth, trepo string, requests int,
 		}()
 	}
 
-	// Clean up
+	// FIXME: delete folder, add a separate DELETE test
+
+	// clean up
 	if config.mixedSize {
 		err = deleteUploadedFiles(manifestHashSizeS, configHashSizeS, layerHashSizeS, url, client)
 		if err != nil {
