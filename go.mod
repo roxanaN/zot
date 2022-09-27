@@ -55,6 +55,7 @@ require (
 require github.com/open-policy-agent/opa v0.43.0 // indirect
 
 require (
+	github.com/notaryproject/notation v0.10.0-alpha.3.dev.20220918
 	github.com/notaryproject/notation-go v0.10.0-alpha.3
 	github.com/opencontainers/distribution-spec/specs-go v0.0.0-20220620172159-4ab4752c3b86
 	github.com/sigstore/cosign v1.11.1
@@ -266,6 +267,7 @@ require (
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/mpvl/unique v0.0.0-20150818121801-cbe035fff7de // indirect
 	github.com/nmcclain/asn1-ber v0.0.0-20170104154839-2661553a0484 // indirect
+	github.com/notaryproject/notation-core-go v0.1.0-alpha.3 // indirect
 	github.com/oklog/ulid v1.3.1 // indirect
 	github.com/opencontainers/runc v1.1.3 // indirect
 	github.com/opencontainers/runtime-spec v1.0.3-0.20210326190908-1c3f411f0417 // indirect
